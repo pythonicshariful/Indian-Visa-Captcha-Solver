@@ -26,6 +26,7 @@
         AUTO_FILL: true,           // Automatically fill the captcha input field
         AUTO_RETRY_ON_FAIL: true,  // Refresh captcha and retry if OCR confidence is low
         MIN_CONFIDENCE: 30,        // Minimum confidence % to accept result
+        MIN_LENGTH: 5,             // Minimum character length to accept result
         RETRY_DELAY_MS: 500,       // Delay before retrying
         MAX_RETRIES: 5,            // Maximum retry attempts
     };
@@ -365,6 +366,13 @@
 
                     if (confidence < CONFIG.MIN_CONFIDENCE) {
                         setStatus(`⚠ Low confidence (${confidence}%)`, "yellow");
+                        setResult(text, confidence, allResults);
+                        handleRetry();
+                        return;
+                    }
+
+                    if (text.length < CONFIG.MIN_LENGTH) {
+                        setStatus(`⚠ Text too short ("${text}")`, "yellow");
                         setResult(text, confidence, allResults);
                         handleRetry();
                         return;

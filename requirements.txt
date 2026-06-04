@@ -4,3 +4,4 @@ pytesseract
 Pillow
 opencv-python
 numpy
+easyocr

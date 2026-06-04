@@ -6,69 +6,47 @@ A hybrid captcha solver for the Indian Visa Bangladesh registration site. Uses a
 
 ```
 ┌──────────────────────┐       POST /solve        ┌─────────────────────────┐
-│   Tampermonkey        │ ──── (base64 image) ───→ │   Python Flask Server   │
-│   Userscript          │                          │   (127.0.0.1:5555)      │
-│                       │ ←── { text, confidence } │                         │
-│  • Extracts captcha   │                          │  • 5 preprocessing      │
-│  • Auto-fills input   │                          │    strategies           │
-│  • Floating UI panel  │                          │  • 4 Tesseract configs  │
-│  • Auto-retry logic   │                          │  • Consensus voting     │
-└──────────────────────┘                           └─────────────────────────┘
+│   Tampermonkey       │ ──── (base64 image) ───→ │   Python Flask Server   │
+│   Userscript         │                          │   (127.0.0.1:5555)      │
+│                      │ ←── { text, confidence } │                         │
+│  • Extracts captcha  │                          │  • EasyOCR (Default)    │
+│  • Auto-fills input  │                          │  • Gemini API           │
+│  • Auto-retry logic  │                          │  • Tesseract OCR        │
+└──────────────────────┘                          └─────────────────────────┘
 ```
+
+## Solvers Overview
+
+This project supports three different solvers. You can switch between them by editing `config.py`.
+
+1. **EasyOCR (Default):** Runs locally using PyTorch. Highly accurate but might require an initial download of the English model. Does not require any external installation (other than `pip install`).
+2. **Gemini API:** Uses Google's Gemini Vision model for perfect accuracy. Requires a free API key.
+3. **Tesseract OCR:** A fast, local, traditional OCR engine. Requires installing Tesseract software on your machine.
+
+---
 
 ## Prerequisites
 
-### 1. Install Tesseract OCR
+### 1. Install Python Dependencies
 
-**Windows (step-by-step):**
-
-#### Step 1 — Download the installer
-Go to: https://digi.bib.uni-mannheim.de/tesseract/
-
-Download the latest **64-bit** installer. The file will be named something like:
-```
-tesseract-ocr-w64-setup-5.x.x.exe
-```
-
-#### Step 2 — Run the installer
-1. Double-click the downloaded `.exe` file
-2. Click **Next** through the setup wizard
-3. On the **"Choose Install Location"** screen, keep the default path:
-   ```
-   C:\Program Files\Tesseract-OCR
-   ```
-4. Complete the installation
-
-#### Step 3 — Add to Windows PATH
-1. Press **Win + R**, type `sysdm.cpl`, press **Enter**
-2. Go to the **Advanced** tab → click **Environment Variables**
-3. Under **System variables**, find and select **Path** → click **Edit**
-4. Click **New** and add:
-   ```
-   C:\Program Files\Tesseract-OCR
-   ```
-5. Click **OK** → **OK** → **OK** to save
-
-#### Step 4 — Verify installation
-> ⚠️ **Important:** Open a **new** PowerShell/CMD window (existing ones won't pick up the PATH change)
+Open a terminal in the project directory and install the required Python packages:
 
 ```bash
-tesseract --version
-```
-You should see output like `tesseract v5.x.x`.
-
-#### Alternative (skip PATH setup)
-If you don't want to modify PATH, uncomment line 28 in `server.py` and hardcode the path:
-```python
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-```
-
-### 2. Install Python Dependencies
-
-```bash
-cd d:\motin\capsolver
 pip install -r requirements.txt
 ```
+
+*(Note: The first time you run the server with EasyOCR, it may take a minute to download the EasyOCR language models).*
+
+### 2. Configure Your Solver (Optional)
+
+Open `config.py` and set your preferred solver:
+
+```python
+ACTIVE_SOLVER = "easyocr"  # Options: "easyocr", "gemini", "tesseract"
+```
+
+- If using **Gemini**: You must set `GEMINI_API_KEY` in `config.py` to your Google AI Studio API key.
+- If using **Tesseract**: You must install the Tesseract OCR executable for your operating system (e.g., from [UB-Mannheim](https://github.com/UB-Mannheim/tesseract/wiki) on Windows) and add it to your PATH.
 
 ### 3. Install Tampermonkey Browser Extension
 
@@ -76,37 +54,29 @@ pip install -r requirements.txt
 - [Firefox](https://addons.mozilla.org/en-US/firefox/addon/tampermonkey/)
 - [Edge](https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd)
 
+---
+
 ## Quick Start
 
 ### Step 1: Start the Python server
 
 ```bash
-cd d:\motin\capsolver
 python server.py
-```
-
-You should see:
-```
-08:00:00 │ INFO    │ ════════════════════════════════════════════════════════════
-08:00:00 │ INFO    │   CAPTCHA SOLVER SERVER
-08:00:00 │ INFO    │   Listening on http://127.0.0.1:5555
-08:00:00 │ INFO    │ ════════════════════════════════════════════════════════════
-08:00:00 │ INFO    │   Tesseract version: 5.x.x
 ```
 
 ### Step 2: Install the Tampermonkey userscript
 
-1. Open Tampermonkey Dashboard
-2. Click **"+"** (Create new script)
-3. Delete the template content
-4. Paste the entire contents of `tampermonkey-captcha-solver.user.js`
-5. Press **Ctrl+S** to save
+1. Open Tampermonkey Dashboard in your browser.
+2. Click **"+"** (Create new script).
+3. Delete the template content.
+4. Paste the entire contents of `tampermonkey-captcha-solver.user.js`.
+5. Press **Ctrl+S** to save.
 
 ### Step 3: Visit the site
 
 Go to https://indianvisa-bangladesh.nic.in/visa/Registration
 
-The floating panel will appear in the bottom-right corner and auto-solve the captcha.
+The floating panel will appear in the bottom-right corner and auto-solve the captcha!
 
 ## Features
 
@@ -114,33 +84,15 @@ The floating panel will appear in the bottom-right corner and auto-solve the cap
 |---------|-------------|
 | **Auto-solve** | Automatically solves captcha on page load |
 | **Auto-fill** | Fills the captcha input field and triggers proper events |
-| **Auto-retry** | If confidence is low, refreshes captcha and retries (up to 5x) |
-| **Floating UI** | Shows solve status, confidence, and alternative results |
-| **Multi-strategy OCR** | 5 image preprocessing pipelines × 4 Tesseract configs |
-| **Consensus voting** | Multiple OCR results vote on the best answer |
-| **CORS handling** | Uses `GM_xmlhttpRequest` to bypass CORS restrictions |
-
-## Configuration
-
-Edit the `CONFIG` object in the Tampermonkey script:
-
-```javascript
-const CONFIG = {
-    SERVER_URL: "http://127.0.0.1:5555/solve",
-    AUTO_SOLVE: true,          // Auto-solve on page load
-    AUTO_FILL: true,           // Auto-fill input field
-    AUTO_RETRY_ON_FAIL: true,  // Retry on low confidence
-    MIN_CONFIDENCE: 30,        // Minimum confidence threshold %
-    MAX_RETRIES: 5,            // Max retry attempts
-};
-```
+| **Auto-retry** | Refreshes and retries if confidence is low or text is too short (< 5 chars) |
+| **Multi-Solver** | Choose between EasyOCR, Gemini AI, or Tesseract |
+| **Image Preprocessing**| OpenCV cleans noise and removes strikethroughs automatically |
 
 ## Troubleshooting
 
 | Problem | Solution |
 |---------|----------|
 | "Server offline" | Make sure `python server.py` is running |
-| "Tesseract not found" | Install Tesseract and add to PATH |
-| Low accuracy | Try adjusting preprocessing thresholds in `server.py` |
-| CORS errors | Make sure `@connect 127.0.0.1` is in the userscript header |
-| Input not filling | Check `getCaptchaInput()` selectors in the userscript |
+| "Tesseract not found" | If using Tesseract, install the `.exe` and add it to PATH |
+| Captcha is incorrect | Ensure you are using `easyocr` or `gemini` in `config.py` for best accuracy |
+| Input not filling | Check the Tampermonkey panel. If it says "Too short", it will automatically retry. |

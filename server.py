@@ -14,11 +14,21 @@ import io
 import base64
 import re
 import logging
+import json
+import urllib.request
 
 import cv2
+from config import GEMINI_API_KEY, ACTIVE_SOLVER
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
+
+try:
+    import easyocr
+    reader = easyocr.Reader(['en'])
+except ImportError:
+    reader = None
+
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 
@@ -167,6 +177,137 @@ def solve_captcha(img: Image.Image) -> dict:
         "all_results": all_unique[:10],
     }
 
+def solve_captcha_gemini(img: Image.Image) -> dict:
+    """Solve captcha using Gemini API."""
+    try:
+        # Get preprocessed variants to help Gemini see past the lines and gradients
+        variants = preprocess_captcha(img)
+        # variants[2] is the aggressive noise removal (strikethrough removed)
+        # variants[4] is the PIL high contrast
+        
+        # Base64 encode raw image
+        buf_raw = io.BytesIO()
+        img.convert("RGB").save(buf_raw, format="PNG")
+        b64_raw = base64.b64encode(buf_raw.getvalue()).decode("utf-8")
+
+        # Base64 encode cleaned image (strikethrough removed)
+        buf_clean = io.BytesIO()
+        variants[2].convert("RGB").save(buf_clean, format="PNG")
+        b64_clean = base64.b64encode(buf_clean.getvalue()).decode("utf-8")
+
+        # Base64 encode enhanced image
+        buf_enh = io.BytesIO()
+        variants[4].convert("RGB").save(buf_enh, format="PNG")
+        b64_enh = base64.b64encode(buf_enh.getvalue()).decode("utf-8")
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+        
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": "Solve this captcha. I have provided the raw image, a cleaned version with the strikethrough removed, and a high-contrast version. It ALWAYS contains exactly 5 or 6 alphanumeric characters. Read all characters from left to right carefully. The first characters might be hidden in a dark background. Only output the exact text/numbers in the captcha, nothing else. No explanation."},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": b64_raw
+                        }
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": b64_clean
+                        }
+                    },
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": b64_enh
+                        }
+                    }
+                ]
+            }],
+            "generationConfig": {
+                "temperature": 0.0,
+                "maxOutputTokens": 20,
+            }
+        }
+        
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps(payload).encode("utf-8"), 
+            headers={"Content-Type": "application/json"}
+        )
+        
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode("utf-8"))
+            
+        try:
+            candidate = result.get("candidates", [{}])[0]
+            content = candidate.get("content", {})
+            parts = content.get("parts", [])
+            if parts:
+                text = parts[0].get("text", "").strip()
+            else:
+                text = ""
+            text = clean_ocr_text(text)
+        except Exception as e:
+            log.error(f"Failed to parse Gemini response: {e}")
+            text = ""
+            
+        return {
+            "text": text,
+            "confidence": 100.0,
+            "all_results": [text],
+            "solver": "gemini"
+        }
+    except Exception as e:
+        log.error(f"Gemini API error: {e}")
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "gemini", "error": str(e)}
+
+
+def solve_captcha_easyocr(img: Image.Image) -> dict:
+    """Solve captcha using EasyOCR."""
+    if reader is None:
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "easyocr", "error": "EasyOCR not installed"}
+        
+    try:
+        variants = preprocess_captcha(img)
+        variants.insert(0, img) # include raw image
+        
+        results = []
+        for variant in variants:
+            img_np = np.array(variant.convert('RGB'))
+            res = reader.readtext(img_np, detail=0)
+            text = clean_ocr_text("".join(res))
+            if text:
+                results.append(text)
+                
+        if not results:
+            return {"text": "", "confidence": 0, "all_results": [], "solver": "easyocr"}
+
+        # Indian gov captchas are typically 5-6 characters
+        ideal_range = [r for r in results if 4 <= len(r) <= 7]
+        pool = ideal_range if ideal_range else results
+        
+        vote_count = {}
+        for r in pool:
+            vote_count[r] = vote_count.get(r, 0) + 1
+            
+        best_text = max(vote_count, key=vote_count.get)
+        confidence = vote_count[best_text] / len(pool) * 100
+        
+        all_unique = list(set(results))
+        
+        return {
+            "text": best_text,
+            "confidence": round(confidence, 1),
+            "all_results": all_unique[:10],
+            "solver": "easyocr"
+        }
+    except Exception as e:
+        log.error(f"EasyOCR error: {e}")
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "easyocr", "error": str(e)}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  API ENDPOINTS
@@ -196,8 +337,20 @@ def solve():
             return jsonify({"error": "No image provided"}), 400
 
         log.info(f"Received captcha image: {img.size[0]}x{img.size[1]}")
-        result = solve_captcha(img)
-        log.info(f"Solved: '{result['text']}' (confidence: {result['confidence']}%)")
+        
+        # Use the solver configured in config.py
+        solver = ACTIVE_SOLVER
+        
+        if solver == "gemini" and GEMINI_API_KEY:
+            result = solve_captcha_gemini(img)
+            log.info(f"Solved with Gemini: '{result.get('text', '')}'")
+        elif solver == "easyocr":
+            result = solve_captcha_easyocr(img)
+            log.info(f"Solved with EasyOCR: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
+        else:
+            result = solve_captcha(img)
+            result["solver"] = "tesseract"
+            log.info(f"Solved with Tesseract: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
 
         return jsonify(result)
 
@@ -234,7 +387,7 @@ def index():
         <p>Server is running. Use the Tampermonkey userscript to auto-solve captchas.</p>
         <h3>Endpoints:</h3>
         <ul>
-            <li><code>POST /solve</code> — Send captcha image (base64 or file upload)</li>
+            <li><code>POST /solve</code> — Send captcha image (base64 or file upload). Accepts optional <code>?solver=gemini</code> or <code>?solver=tesseract</code>.</li>
             <li><code>GET /health</code> — Check Tesseract availability</li>
         </ul>
     </body>
