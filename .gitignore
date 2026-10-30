@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# Trained model files are large binaries — keep them out of git
+models/*.keras
+models/*.h5

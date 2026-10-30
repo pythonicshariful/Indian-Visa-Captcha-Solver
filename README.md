@@ -12,16 +12,18 @@ A hybrid captcha solver for the Indian Visa Bangladesh registration site. Uses a
 │  • Extracts captcha  │                          │  • EasyOCR (Default)    │
 │  • Auto-fills input  │                          │  • Gemini API           │
 │  • Auto-retry logic  │                          │  • Tesseract OCR        │
+│                      │                          │  • Custom CNN model     │
 └──────────────────────┘                          └─────────────────────────┘
 ```
 
 ## Solvers Overview
 
-This project supports three different solvers. You can switch between them by editing `config.py`.
+This project supports four different solvers. You can switch between them by editing `config.py`.
 
 1. **EasyOCR (Default):** Runs locally using PyTorch. Highly accurate but might require an initial download of the English model. Does not require any external installation (other than `pip install`).
 2. **Gemini API:** Uses Google's Gemini Vision model for perfect accuracy. Requires a free API key.
 3. **Tesseract OCR:** A fast, local, traditional OCR engine. Requires installing Tesseract software on your machine.
+4. **Custom CNN (`cnn`):** A Keras CNN trained on the Captcha-v2 dataset (GeeksforGeeks "Breaking a CAPTCHA system" architecture, see `cnn_solver.py`). Fully local, no API key. ⚠️ Honest limits: it only handles **5-character** captchas, was NOT trained on Indian Visa captchas, and scored ~54% per-character / ~5% full-captcha on its own held-out test set — so on the visa site EasyOCR or Gemini will usually do better until the CNN is retrained on visa-style captcha images. Requires the model file at `models/captcha_model.keras` (not stored in git — see `models/README.md`) and TensorFlow installed.
 
 ---
 
@@ -42,11 +44,15 @@ pip install -r requirements.txt
 Open `config.py` and set your preferred solver:
 
 ```python
-ACTIVE_SOLVER = "easyocr"  # Options: "easyocr", "gemini", "tesseract"
+ACTIVE_SOLVER = "easyocr"  # Options: "easyocr", "gemini", "tesseract", "cnn"
 ```
 
-- If using **Gemini**: You must set `GEMINI_API_KEY` in `config.py` to your Google AI Studio API key.
+- If using **Gemini**: Set your Google AI Studio key as an environment variable — never paste it into `config.py` (this repo is public):
+  - Windows: `setx GEMINI_API_KEY "your-key"` then restart the terminal
+  - Linux/Mac: `export GEMINI_API_KEY="your-key"`
+  - ⚠️ An earlier version of `config.py` contained a real key in plain text. That key is compromised — revoke it in Google AI Studio and issue a new one.
 - If using **Tesseract**: You must install the Tesseract OCR executable for your operating system (e.g., from [UB-Mannheim](https://github.com/UB-Mannheim/tesseract/wiki) on Windows) and add it to your PATH.
+- If using **CNN**: Copy the trained `captcha_model.keras` into the `models/` folder (see `models/README.md`) and make sure TensorFlow is installed (`pip install tensorflow`).
 
 ### 3. Install Tampermonkey Browser Extension
 
@@ -85,7 +91,7 @@ The floating panel will appear in the bottom-right corner and auto-solve the cap
 | **Auto-solve** | Automatically solves captcha on page load |
 | **Auto-fill** | Fills the captcha input field and triggers proper events |
 | **Auto-retry** | Refreshes and retries if confidence is low or text is too short (< 5 chars) |
-| **Multi-Solver** | Choose between EasyOCR, Gemini AI, or Tesseract |
+| **Multi-Solver** | Choose between EasyOCR, Gemini AI, Tesseract, or the custom CNN model |
 | **Image Preprocessing**| OpenCV cleans noise and removes strikethroughs automatically |
 
 ## Troubleshooting

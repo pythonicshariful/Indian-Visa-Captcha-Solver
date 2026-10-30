@@ -18,7 +18,8 @@ import json
 import urllib.request
 
 import cv2
-from config import GEMINI_API_KEY, ACTIVE_SOLVER
+from config import GEMINI_API_KEY, ACTIVE_SOLVER, CNN_MODEL_PATH
+from cnn_solver import solve_captcha_cnn
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
 import pytesseract
@@ -344,6 +345,9 @@ def solve():
         if solver == "gemini" and GEMINI_API_KEY:
             result = solve_captcha_gemini(img)
             log.info(f"Solved with Gemini: '{result.get('text', '')}'")
+        elif solver == "cnn":
+            result = solve_captcha_cnn(img, CNN_MODEL_PATH)
+            log.info(f"Solved with CNN: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
         elif solver == "easyocr":
             result = solve_captcha_easyocr(img)
             log.info(f"Solved with EasyOCR: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
@@ -387,7 +391,7 @@ def index():
         <p>Server is running. Use the Tampermonkey userscript to auto-solve captchas.</p>
         <h3>Endpoints:</h3>
         <ul>
-            <li><code>POST /solve</code> — Send captcha image (base64 or file upload). Accepts optional <code>?solver=gemini</code> or <code>?solver=tesseract</code>.</li>
+            <li><code>POST /solve</code> — Send captcha image (base64 or file upload). The solver is chosen by <code>ACTIVE_SOLVER</code> in config.py: gemini, tesseract, easyocr or cnn.</li>
             <li><code>GET /health</code> — Check Tesseract availability</li>
         </ul>
     </body>
