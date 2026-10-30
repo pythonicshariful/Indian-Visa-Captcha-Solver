@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
 
+# Secrets — never commit API keys
+.env
+
 # Trained model files are large binaries — keep them out of git
 models/*.keras
 models/*.h5

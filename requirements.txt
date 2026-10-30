@@ -5,5 +5,6 @@ Pillow
 opencv-python
 numpy
 easyocr
+python-dotenv
 # only needed for the "cnn" solver:
 tensorflow

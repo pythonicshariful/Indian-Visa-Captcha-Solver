@@ -18,7 +18,14 @@ import json
 import urllib.request
 
 import cv2
-from config import GEMINI_API_KEY, ACTIVE_SOLVER, CNN_MODEL_PATH
+import config
+from config import (
+    ACTIVE_SOLVER,
+    CNN_MODEL_PATH,
+    OPENROUTER_API_KEY,
+    OPENROUTER_URL,
+    OPENROUTER_MODEL,
+)
 from cnn_solver import solve_captcha_cnn
 import numpy as np
 from PIL import Image, ImageFilter, ImageEnhance
@@ -112,6 +119,23 @@ def clean_ocr_text(raw: str) -> str:
     return cleaned
 
 
+def extract_openrouter_text(content) -> str:
+    """Extract assistant text from string or multimodal content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and isinstance(block.get("text"), str):
+                parts.append(block["text"])
+        return " ".join(parts)
+    if isinstance(content, dict) and isinstance(content.get("text"), str):
+        return content["text"]
+    return ""
+
+
 def ocr_single(img: Image.Image, config: str) -> str:
     """Run Tesseract on a single image with given config."""
     try:
@@ -178,94 +202,6 @@ def solve_captcha(img: Image.Image) -> dict:
         "all_results": all_unique[:10],
     }
 
-def solve_captcha_gemini(img: Image.Image) -> dict:
-    """Solve captcha using Gemini API."""
-    try:
-        # Get preprocessed variants to help Gemini see past the lines and gradients
-        variants = preprocess_captcha(img)
-        # variants[2] is the aggressive noise removal (strikethrough removed)
-        # variants[4] is the PIL high contrast
-        
-        # Base64 encode raw image
-        buf_raw = io.BytesIO()
-        img.convert("RGB").save(buf_raw, format="PNG")
-        b64_raw = base64.b64encode(buf_raw.getvalue()).decode("utf-8")
-
-        # Base64 encode cleaned image (strikethrough removed)
-        buf_clean = io.BytesIO()
-        variants[2].convert("RGB").save(buf_clean, format="PNG")
-        b64_clean = base64.b64encode(buf_clean.getvalue()).decode("utf-8")
-
-        # Base64 encode enhanced image
-        buf_enh = io.BytesIO()
-        variants[4].convert("RGB").save(buf_enh, format="PNG")
-        b64_enh = base64.b64encode(buf_enh.getvalue()).decode("utf-8")
-
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-        
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": "Solve this captcha. I have provided the raw image, a cleaned version with the strikethrough removed, and a high-contrast version. It ALWAYS contains exactly 5 or 6 alphanumeric characters. Read all characters from left to right carefully. The first characters might be hidden in a dark background. Only output the exact text/numbers in the captcha, nothing else. No explanation."},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/png",
-                            "data": b64_raw
-                        }
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": "image/png",
-                            "data": b64_clean
-                        }
-                    },
-                    {
-                        "inline_data": {
-                            "mime_type": "image/png",
-                            "data": b64_enh
-                        }
-                    }
-                ]
-            }],
-            "generationConfig": {
-                "temperature": 0.0,
-                "maxOutputTokens": 20,
-            }
-        }
-        
-        req = urllib.request.Request(
-            url, 
-            data=json.dumps(payload).encode("utf-8"), 
-            headers={"Content-Type": "application/json"}
-        )
-        
-        with urllib.request.urlopen(req) as response:
-            result = json.loads(response.read().decode("utf-8"))
-            
-        try:
-            candidate = result.get("candidates", [{}])[0]
-            content = candidate.get("content", {})
-            parts = content.get("parts", [])
-            if parts:
-                text = parts[0].get("text", "").strip()
-            else:
-                text = ""
-            text = clean_ocr_text(text)
-        except Exception as e:
-            log.error(f"Failed to parse Gemini response: {e}")
-            text = ""
-            
-        return {
-            "text": text,
-            "confidence": 100.0,
-            "all_results": [text],
-            "solver": "gemini"
-        }
-    except Exception as e:
-        log.error(f"Gemini API error: {e}")
-        return {"text": "", "confidence": 0, "all_results": [], "solver": "gemini", "error": str(e)}
-
-
 def solve_captcha_easyocr(img: Image.Image) -> dict:
     """Solve captcha using EasyOCR."""
     if reader is None:
@@ -310,6 +246,95 @@ def solve_captcha_easyocr(img: Image.Image) -> dict:
         return {"text": "", "confidence": 0, "all_results": [], "solver": "easyocr", "error": str(e)}
 
 
+def solve_captcha_openrouter(img: Image.Image) -> dict:
+    """
+    Solve captcha using a free vision-capable LLM on OpenRouter.
+
+    Approach adapted from https://github.com/ceodaniyal/free-llm-image-to-text:
+    the image is sent as a base64 data URL to an OpenRouter chat-completions
+    endpoint with a vision model. Here we send the raw image plus two
+    preprocessed variants (strikethrough removed + high contrast) to help the
+    model see past the noise on Indian government captchas.
+    """
+    if not OPENROUTER_API_KEY:
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "openrouter",
+                "error": "OpenRouter API key not configured (set OPENROUTER_API_KEY)"}
+
+    try:
+        variants = preprocess_captcha(img)
+        # variants[2] = strikethrough/noise removed, variants[4] = high contrast
+        images = [img.convert("RGB"), variants[2].convert("RGB"), variants[4].convert("RGB")]
+
+        content = [{
+            "type": "text",
+            "text": ("Solve the captcha shown in the images. It always contains exactly "
+                     "5 or 6 alphanumeric characters — read them left to right. The "
+                     "strikethrough lines are distractors; ignore them. Output ONLY the "
+                     "captcha characters, with no explanation."),
+        }]
+        for im in images:
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            b64 = base64.b64encode(buf.getvalue()).decode("utf-8")
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+
+        payload = {
+            "model": OPENROUTER_MODEL,
+            "messages": [{"role": "user", "content": content}],
+            "temperature": 0.0,
+            "max_tokens": 150,
+            "reasoning": {"effort": "none", "exclude": True},
+        }
+
+        req = urllib.request.Request(
+            OPENROUTER_URL,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+            },
+        )
+
+        with urllib.request.urlopen(req, timeout=30) as response:
+            result = json.loads(response.read().decode("utf-8"))
+
+        choices = result.get("choices", [])
+        message = choices[0].get("message", {}) if choices else {}
+        raw_text = extract_openrouter_text(message.get("content", ""))
+        text = clean_ocr_text(raw_text or "")
+        if not text:
+            finish_reason = choices[0].get("finish_reason") if choices else None
+            log.warning(
+                "OpenRouter returned no OCR text (model=%s, finish_reason=%s, message_keys=%s)",
+                result.get("model", OPENROUTER_MODEL),
+                finish_reason,
+                sorted(message.keys()) if isinstance(message, dict) else [],
+            )
+            return {
+                "text": "", "confidence": 0, "all_results": [],
+                "solver": "openrouter",
+                "error": "OpenRouter returned no readable text",
+            }
+
+        return {
+            "text": text,
+            "confidence": 100.0 if text else 0,
+            "all_results": [text] if text else [],
+            "solver": "openrouter",
+        }
+    except urllib.error.HTTPError as e:
+        response_body = e.read().decode("utf-8", errors="replace").strip()
+        error = f"OpenRouter HTTP {e.code}: {response_body or e.reason}"
+        log.error(error)
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "openrouter", "error": error}
+    except Exception as e:
+        log.error(f"OpenRouter API error: {e}")
+        return {"text": "", "confidence": 0, "all_results": [], "solver": "openrouter", "error": str(e)}
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  API ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -341,20 +366,27 @@ def solve():
         
         # Use the solver configured in config.py
         solver = ACTIVE_SOLVER
+        log.info(f"Using solver: {solver}")
         
-        if solver == "gemini" and GEMINI_API_KEY:
-            result = solve_captcha_gemini(img)
-            log.info(f"Solved with Gemini: '{result.get('text', '')}'")
-        elif solver == "cnn":
+        if solver == "cnn":
             result = solve_captcha_cnn(img, CNN_MODEL_PATH)
-            log.info(f"Solved with CNN: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
+        elif solver == "openrouter":
+            result = solve_captcha_openrouter(img)
         elif solver == "easyocr":
             result = solve_captcha_easyocr(img)
-            log.info(f"Solved with EasyOCR: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
-        else:
+        elif solver == "tesseract":
             result = solve_captcha(img)
             result["solver"] = "tesseract"
-            log.info(f"Solved with Tesseract: '{result.get('text', '')}' (confidence: {result.get('confidence', 0)}%)")
+        else:
+            log.warning(f"Unknown solver '{solver}', falling back to Tesseract")
+            result = solve_captcha(img)
+            result["solver"] = "tesseract"
+
+        # Log the result clearly
+        if "error" in result:
+            log.error(f"Solver error: {result['error']}")
+        else:
+            log.info(f"SOLVED CAPTCHA: '{result.get('text', '')}' (Confidence: {result.get('confidence', 0)}%)")
 
         return jsonify(result)
 
@@ -391,7 +423,7 @@ def index():
         <p>Server is running. Use the Tampermonkey userscript to auto-solve captchas.</p>
         <h3>Endpoints:</h3>
         <ul>
-            <li><code>POST /solve</code> — Send captcha image (base64 or file upload). The solver is chosen by <code>ACTIVE_SOLVER</code> in config.py: gemini, tesseract, easyocr or cnn.</li>
+            <li><code>POST /solve</code> — Send captcha image (base64 or file upload). The solver is chosen by <code>ACTIVE_SOLVER</code> in config.py: openrouter, tesseract, easyocr or cnn.</li>
             <li><code>GET /health</code> — Check Tesseract availability</li>
         </ul>
     </body>
@@ -406,6 +438,7 @@ def index():
 if __name__ == "__main__":
     log.info("=" * 60)
     log.info("  CAPTCHA SOLVER SERVER")
+    log.info(f"  Active Solver: {ACTIVE_SOLVER}")
     log.info("  Listening on http://127.0.0.1:5555")
     log.info("=" * 60)
 
@@ -417,5 +450,18 @@ if __name__ == "__main__":
         log.warning(f"  ⚠ Tesseract not found! Install it first.")
         log.warning(f"    Error: {e}")
         log.warning(f"    Download: https://github.com/UB-Mannheim/tesseract/wiki")
+
+    # Check CNN model if active
+    if ACTIVE_SOLVER == "cnn":
+        import os
+        if not os.path.exists(CNN_MODEL_PATH):
+            log.warning(f"  ⚠ CNN model file not found at: {CNN_MODEL_PATH}")
+            log.warning(f"    Please download it from the link in models/README.md")
+
+    # Check OpenRouter key if active
+    if ACTIVE_SOLVER == "openrouter" and not OPENROUTER_API_KEY:
+        log.warning(f"  ⚠ OPENROUTER_API_KEY is not set")
+        log.warning(f"    Get a free key at https://openrouter.ai/keys")
+        log.warning(f"    Windows:  setx OPENROUTER_API_KEY \"your-key\"  (then restart)")
 
     app.run(host="127.0.0.1", port=5555, debug=False)

@@ -24,9 +24,31 @@ Place the trained file at models/captcha_model.keras (see models/README.md).
 import logging
 import os
 import string
+import typing
 
 import numpy as np
 from PIL import Image
+
+# ── Monkeypatch for Python 3.9 typing bug in TensorFlow 2.16+ ──────────────────
+def _patched_remove_dups_flatten(parameters):
+    new_params = []
+    for p in parameters:
+        found = False
+        for existing in new_params:
+            try:
+                if p == existing:
+                    found = True
+                    break
+            except TypeError:
+                continue
+        if not found:
+            new_params.append(p)
+    return tuple(new_params)
+
+if not hasattr(typing, "_patched_for_tf"):
+    typing._remove_dups_flatten = _patched_remove_dups_flatten
+    typing._patched_for_tf = True
+# ───────────────────────────────────────────────────────────────────────────────
 
 log = logging.getLogger("captcha-solver")
 
