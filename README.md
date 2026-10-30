@@ -14,13 +14,13 @@ A hybrid captcha solver for the Indian Visa online application sites. A **Tamper
 │   Userscript         │                          │   (127.0.0.1:5555)      │
 │                      │ ←── { text, confidence } │                         │
 │  • Extracts captcha  │                          │  • EasyOCR (Default)    │
-│  • Auto-fills input  │                          │  • Gemini API           │
+│  • Auto-fills input  │                          │  • OpenRouter LLM       │
 │  • Auto-retry logic  │                          │  • Tesseract OCR        │
 │                      │                          │  • Custom CNN model     │
 └──────────────────────┘                          └─────────────────────────┘
 ```
 
-The server never leaves your machine (`127.0.0.1`). Only the Gemini solver (if you choose it) sends the captcha image to Google's API.
+The server never leaves your machine (`127.0.0.1`). Only the OpenRouter solver sends the captcha image to an external API.
 
 ---
 
@@ -67,7 +67,7 @@ pip install -r requirements.txt
 > | Solver | Install command |
 > |---|---|
 > | EasyOCR | `pip install flask flask-cors Pillow opencv-python numpy easyocr` |
-> | Gemini | `pip install flask flask-cors Pillow opencv-python numpy` |
+> | OpenRouter | `pip install flask flask-cors Pillow opencv-python numpy python-dotenv` |
 > | Tesseract | `pip install flask flask-cors Pillow opencv-python numpy pytesseract` + the Tesseract program (Step 3) |
 > | CNN | `pip install flask flask-cors Pillow opencv-python numpy tensorflow` |
 
@@ -76,20 +76,20 @@ pip install -r requirements.txt
 Open **`config.py`** and set one line:
 
 ```python
-ACTIVE_SOLVER = "easyocr"   # ← change this
+ACTIVE_SOLVER = "openrouter"   # ← change this
 ```
 
 | Solver | Accuracy on visa captchas | Needs | Notes |
 |---|---|---|---|
-| `"easyocr"` ⭐ default | Good | Nothing extra | First run downloads its OCR model (~100 MB), then works fully offline |
-| `"gemini"` | Best | Free Google AI Studio API key + internet | Sends the image to Google — see the key instructions below |
+| `"openrouter"` ⭐ default | Best | Free OpenRouter API key + internet | Sends the image to a free vision model |
+| `"easyocr"` | Good | Nothing extra | First run downloads its OCR model (~100 MB), then works fully offline |
 | `"tesseract"` | Fair | Tesseract program installed | Fastest, fully offline, but struggles with noisy captchas |
 | `"cnn"` | Poor on visa captchas ⚠️ | Model file download (~51 MB) | A custom-trained model — see the honest warning below before choosing it |
 
-**If you picked Gemini** — get a free key from [Google AI Studio](https://aistudio.google.com/apikey), then set it as an environment variable. **Never type the key into `config.py`** — this is a public repo and leaked keys get abused:
+**If you picked OpenRouter** — get a free key from [OpenRouter](https://openrouter.ai/keys), then set it as an environment variable. **Never type the key into `config.py`** — this is a public repo and leaked keys get abused:
 
-- Windows: open Command Prompt and run `setx GEMINI_API_KEY "your-key-here"`, then **close and reopen** the terminal
-- Linux/Mac: `export GEMINI_API_KEY="your-key-here"` in the terminal where you start the server
+- Windows: open Command Prompt and run `setx OPENROUTER_API_KEY "your-key-here"`, then **close and reopen** the terminal
+- Linux/Mac: `export OPENROUTER_API_KEY="your-key-here"` in the terminal where you start the server
 
 **If you picked Tesseract (Windows)** — install the Tesseract program from [UB-Mannheim](https://github.com/UB-Mannheim/tesseract/wiki) and add its folder (usually `C:\Program Files\Tesseract-OCR`) to your PATH.
 
@@ -99,7 +99,7 @@ ACTIVE_SOLVER = "easyocr"   # ← change this
 2. Put the file in the **`models/`** folder so the path is `models/captcha_model.keras`
 3. Set `ACTIVE_SOLVER = "cnn"` in `config.py`
 
-> ⚠️ **Honest warning about the CNN solver:** this model (a small Keras CNN from the GeeksforGeeks "Breaking a CAPTCHA system" tutorial) was trained on the *Captcha-v2* dataset, **not** on Indian Visa captchas. It only reads 5-character captchas, its training data contained just 19 different characters, and it scored ~54% per-character on its own test data. It is included for learning/experimenting — for real visa form work, **EasyOCR or Gemini will solve far more captchas correctly.**
+> ⚠️ **Honest warning about the CNN solver:** this model (a small Keras CNN from the GeeksforGeeks "Breaking a CAPTCHA system" tutorial) was trained on the *Captcha-v2* dataset, **not** on Indian Visa captchas. It only reads 5-character captchas, its training data contained just 19 different characters, and it scored ~54% per-character on its own test data. It is included for learning/experimenting — for real visa form work, **OpenRouter or EasyOCR will solve far more captchas correctly.**
 
 ### Step 4 — Start the server
 
@@ -173,8 +173,8 @@ Indian-Visa-Captcha-Solver/
 | `python` is not recognized | Python isn't in PATH — reinstall Python and tick *"Add Python to PATH"*, or use `py server.py` on Windows |
 | **"Tesseract not found"** | Only affects the Tesseract solver — install the program (Step 3) or switch to `easyocr` |
 | **"CNN model file not found"** | You selected `cnn` but `models/captcha_model.keras` is missing — download it (Step 3) into the `models/` folder |
-| Gemini returns empty / error | The `GEMINI_API_KEY` environment variable isn't set in the terminal running the server — set it and restart the server (Step 3) |
-| Captcha answers are often wrong | Switch solver in `config.py` — `gemini` is the most accurate, then `easyocr`. The `cnn` solver is expected to be weak on this site (see the warning in Step 3) |
+| OpenRouter returns empty / error | The `OPENROUTER_API_KEY` environment variable isn't set, or OpenRouter is temporarily rate-limited — set it and restart the server (Step 3) |
+| Captcha answers are often wrong | Switch solver in `config.py` — `openrouter` is usually the most accurate, then `easyocr`. The `cnn` solver is expected to be weak on this site (see the warning in Step 3) |
 | Panel doesn't appear on the site | Check Tampermonkey is enabled and the script is saved/on; the script only runs on the two visa domains listed above |
 | First EasyOCR run is slow | Normal — it downloads its OCR model once (~100 MB), later runs are fast |
 | Port 5555 already in use | Another copy of the server is running — close the old terminal, or change the port in `server.py` **and** `SERVER_URL`/`HEALTH_URL` in the userscript |
@@ -184,13 +184,13 @@ Indian-Visa-Captcha-Solver/
 ## FAQ
 
 **Which solver should I use?**
-Gemini for the highest accuracy (needs internet + a free key), EasyOCR for a fully offline setup. Tesseract is the lightest. CNN is an educational extra.
+OpenRouter for the highest accuracy (needs internet + a free key), EasyOCR for a fully offline setup. Tesseract is the lightest. CNN is an educational extra.
 
 **Does it work on other websites?**
 The server's `/solve` endpoint works with any captcha image, but the userscript only activates on the two Indian Visa domains above. Adding another site means editing the `@match` lines in the userscript.
 
 **Is my data private?**
-With EasyOCR, Tesseract and CNN everything runs on your own computer. With Gemini, the captcha image is sent to Google's API.
+With EasyOCR, Tesseract and CNN everything runs on your own computer. With OpenRouter, the captcha image is sent to OpenRouter's API.
 
 **Why isn't the CNN model file in this repo?**
 It's a 51 MB binary; GitHub repos here keep code only. It is hosted on Google Drive instead (public link in Step 3).
